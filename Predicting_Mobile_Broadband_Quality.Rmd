@@ -1,0 +1,236 @@
+---
+title: "CPUC Predicting Mobile Broadband"
+author: "Jose Mijangos"
+date: "August 26, 2018"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+source("C:\\Users\\josem\\Desktop\\geo.R")
+library(automap)
+library(e1071)
+```
+
+## Functions
+```{r}
+# Returns average and reduces NA values
+vector_avg = function(x1, x2) {
+  x = apply(data.frame(x1,x2), 1, function(x) mean(na.omit(x)))
+  x[is.nan(x)] = NA
+  return(x)
+}
+```
+
+## Read Data
+```{r}
+# Field Test Data
+dat_raw = read.csv("C:\\Users\\josem\\Desktop\\CPUC-research\\Round12_Results_2017.csv")
+```
+
+## Preprocess Data
+```{r collapse=TRUE, warning=FALSE, message=FALSE}
+# Convert to Numeric
+dat = as.data.frame(apply(dat_raw, 2, as.numeric))
+
+# Restore Factors
+dat$Provider = dat_raw$Provider
+dat$Network = dat_raw$Network
+dat$DeviceType = dat_raw$DeviceType
+dat$Type = dat_raw$Type
+
+# Aggregate TCP values
+dat$wTCPUp   = vector_avg(dat$wTCPUp1, dat$wTCPUp2)
+dat$wTCPDown = vector_avg(dat$wTCPDown1, dat$wTCPDown2)
+
+# Remove tuples with bad lat/long values
+dat = dat[dat$Longitude < -100,]
+
+# Project Data
+dat = dat[,c("LocationID", "Latitude", "Longitude", "NormalLONG", "NormalLAT", "Provider", "Network", "DeviceType", "Type", "SigStrength", "wMOS", "wTCPDown", "wTCPUp")]
+
+# Remove all NAs
+dat = na.omit(dat)
+
+# Select data set for each Provider
+dat_att = dat[dat$Provider == "AT&T" & dat$DeviceType=="Phone",]
+dat_sprint = dat[dat$Provider == "Sprint" & dat$DeviceType=="Phone",]
+dat_tmobile = dat[dat$Provider == "T-Mobile" & dat$DeviceType=="Phone",]
+dat_verizon = dat[dat$Provider == "Verizon" & dat$DeviceType=="Phone",]
+```
+
+## Distance Matrix
+```{r}
+earth_radius_in_miles = 3959
+
+n = nrow(dat_att)
+locs = as.matrix(dat_att[1:n,c("NormalLONG", "NormalLAT")])
+gdist = matrix(rep(NA, n*n), ncol=n)
+
+for (i in 1:n) {
+  temp = matrix(as.numeric(rep(locs[i,], each=n)), nrow=n)
+  gdist[i,] = distHaversine(temp, locs, r=earth_radius_in_miles)  
+}
+```
+
+## kNN Prediction Error
+```{r}
+Sig_knn_error = c()
+wMOS_knn_error = c()
+wTCPDown_knn_error = c()
+wTCPUp_knn_error = c()
+
+Sig_weighted_knn_error = c()
+wMOS_weighted_knn_error = c()
+wTCPDown_weighted_knn_error = c()
+wTCPUp_weighted_knn_error = c()
+
+for(l in 1:20) {
+  Sig_knn_predictions = c()
+  wMOS_knn_predictions = c()
+  wTCPDown_knn_predictions = c()
+  wTCPUp_knn_predictions = c()
+
+  Sig_knn_weighted_predictions = c()
+  wMOS_knn_weighted_predictions = c()
+  wTCPDown_knn_weighted_predictions = c()
+  wTCPUp_knn_weighted_predictions = c()
+  for(i in 1:n) {
+    kNearest = order(gdist[i,])[2:l+1]
+    weights = 1/sort(gdist[i,][kNearest] + 0.001)
+    weights = weights/sum(weights)
+    
+    Sig_knn_predictions = c(Sig_knn_predictions, mean(dat_att$SigStrength[kNearest]))
+    wMOS_knn_predictions = c(wMOS_knn_predictions, mean(dat_att$wMOS[kNearest]))
+    wTCPDown_knn_predictions = c(wTCPDown_knn_predictions, mean(dat_att$wTCPDown[kNearest]))
+    wTCPUp_knn_predictions = c(wTCPUp_knn_predictions, mean(dat_att$wTCPUp[kNearest]))
+    
+    Sig_knn_weighted_predictions = c(Sig_knn_weighted_predictions, sum(weights * dat_att$SigStrength[kNearest]))
+    wMOS_knn_weighted_predictions = c(wMOS_knn_weighted_predictions, sum(weights * dat_att$wMOS[kNearest]))
+    wTCPDown_knn_weighted_predictions = c(wTCPDown_knn_weighted_predictions, sum(weights * dat_att$wTCPDown[kNearest]))
+    wTCPUp_knn_weighted_predictions = c(wTCPUp_knn_weighted_predictions, sum(weights * dat_att$wTCPUp[kNearest]))
+  }
+  Sig_knn_error = c(Sig_knn_error, median(abs(Sig_knn_predictions - dat_att$SigStrength)))
+  wMOS_knn_error = c(wMOS_knn_error, median(abs(wMOS_knn_predictions - dat_att$wMOS)))
+  wTCPDown_knn_error = c(wTCPDown_knn_error, median(abs(wTCPDown_knn_predictions - dat_att$wTCPDown)/1000))
+  wTCPUp_knn_error = c(wTCPUp_knn_error, median(abs(wTCPUp_knn_predictions - dat_att$wTCPUp)/1000))
+  
+  Sig_weighted_knn_error = c(Sig_weighted_knn_error, median(abs(Sig_knn_weighted_predictions - dat_att$SigStrength)))
+  wMOS_weighted_knn_error = c(wMOS_weighted_knn_error, median(abs(wMOS_knn_weighted_predictions - dat_att$wMOS)))
+  wTCPDown_weighted_knn_error = c(wTCPDown_weighted_knn_error, median(abs(wTCPDown_knn_weighted_predictions - dat_att$wTCPDown)/1000))
+  wTCPUp_weighted_knn_error = c(wTCPUp_weighted_knn_error, median(abs(wTCPUp_knn_weighted_predictions - dat_att$wTCPUp)/1000))
+}
+```
+
+## kNN Plots
+```{r}
+layout(matrix(c(1,2,3,4), 2, 2, byrow = TRUE))
+plot(Sig_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 10), pch=19, ylab="absolute prediction error", main="Median SigStrength Error")
+points(Sig_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+abline(h = median(abs(dat_att$SigStrength - mean(dat_att$SigStrength))), lty = 2, col = "red", lwd=3)
+grid()
+
+plot(wMOS_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 0.1), pch=19, ylab="absolute prediction error", main="Median wMOS Error")
+points(wMOS_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+abline(h = median(abs(dat_att$wMOS - mean(dat_att$wMOS))), lty = 2, col = "red", lwd=3)
+grid()
+
+plot(wTCPDown_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 12), pch=19, ylab="absolute prediction error", main="Median wTCPDown Error")
+points(wTCPDown_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+abline(h = median(abs(dat_att$wTCPDown - mean(dat_att$wTCPDown)))/1000, lty = 2, col = "red", lwd=3)
+grid()
+
+plot(wTCPUp_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 6.5), pch=19, ylab="absolute prediction error", main="Median wTCPUp Error")
+points(wTCPUp_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+abline(h = median(abs(dat_att$wTCPUp - mean(dat_att$wTCPUp)))/1000, lty = 2, col = "red", lwd=3)
+grid()
+```
+
+```{r}
+kNN = function(X_test, k, data){
+  n = nrow(data)
+  locs = as.matrix(data[,c("NormalLONG", "NormalLAT")])
+  predicted=c()
+  for(i in 1:nrow(X_test)){
+    temp = matrix(as.numeric(rep(X_test[i,], each=n)), nrow=n)
+    predicted = c(predicted, mean(data$wTCPDown[order(distHaversine(temp, locs, r=earth_radius_in_miles))[1:k]]))
+  }
+
+  return(predicted)
+}
+```
+
+```{r}
+X_test = dat_att[100:103,c("NormalLONG", "NormalLAT")]
+kNN(X_test, 10, dat_att)
+dat_att$wTCPDown[100:103]
+```
+
+## Heat Maps
+```{r collapse=TRUE, warning=FALSE, message=FALSE}
+ca=map_data('state', region='California')
+
+ctrl = dat_att
+
+xrang=seq(-124.5,-114,.05)
+yrang=seq(32.5,42.25,.05)
+
+xtarg=c()
+ytarg=c()
+
+zhat_knn=matrix(0,length(xrang),length(yrang))
+
+for(j in 1:length(yrang)){
+  for(i in 1:length(xrang)){
+    if(point.in.polygon(xrang[i], yrang[j], ca$long, ca$lat)){
+      xtarg=c(xtarg, xrang[i])
+      ytarg=c(ytarg, yrang[j])
+    }
+    else{
+      xtarg=c(xtarg, NA)
+      ytarg=c(ytarg, NA)
+    }
+  }
+}
+
+ztarg_knn = kNN(data.frame(NormalLONG=xtarg[!is.na(xtarg)], NormalLAT=ytarg[!is.na(ytarg)]), 10, ctrl)
+
+t=0
+for(j in 1:length(yrang)){
+  for(i in 1:length(xrang)){
+    if(point.in.polygon(xrang[i], yrang[j], ca$long, ca$lat)){
+      t=t+1
+      zhat_knn[i,j]=ztarg_knn[t]
+    }
+    else{
+      zhat_knn[i,j]=0
+    }
+  }
+}
+```
+
+```{r collapse=TRUE, warning=FALSE, message=FALSE}
+layout(matrix(1:2,ncol=2), width = c(3,3,3),height = c(1,1))
+
+ca=map_data('state', region='California')
+plot(dat_att$NormalLAT ~ dat_att$NormalLONG, col=rainbow(80)[51:1][floor(dat_att$wTCPDown/max(dat_att$wTCPDown)*60)+1], pch=19, xlab="Longitude", ylab="Latitude", main="wTCPDown")
+lines(ca, lwd=2)
+
+image(xrang, yrang, zhat_knn, col=rainbow(80)[51:1], xlab="Longitude", ylab="Latitude", main="k Nearest Nieghbor")
+lines(ca, lwd=2)
+```
+
+## Variograms
+```{r collapse=TRUE, warning=FALSE, message=FALSE}
+coordinates(dat_att) =~ NormalLONG + NormalLAT
+Sig_variogram = autofitVariogram(SigStrength/min(SigStrength)~1, dat_att, verbose=FALSE)
+wMOS_variogram = autofitVariogram(wMOS/max(wMOS)~1,dat_att, verbose=FALSE)
+wTCPDown_variogram = autofitVariogram(wTCPDown/max(wTCPDown)~1,dat_att, verbose=FALSE)
+wTCPUp_variogram = autofitVariogram(wTCPUp/max(wTCPUp)~1,dat_att, verbose=FALSE)
+
+layout(matrix(c(1,2,3,4), 2, 2, byrow = TRUE))
+plot(Sig_variogram$exp_var$gamma~Sig_variogram$exp_var$dist, type="l", lwd=4, ylim=c(0,0.07), col="steelblue3", ylab="semi-varience", xlab="distance")
+plot(wMOS_variogram$exp_var$gamma~Sig_variogram$exp_var$dist, type="l", lwd=4, ylim=c(0,0.07), col="steelblue3", ylab="semi-varience", xlab="distance")
+plot(wTCPDown_variogram$exp_var$gamma~Sig_variogram$exp_var$dist, type="l", lwd=4, ylim=c(0,0.07), col="steelblue3", ylab="semi-varience", xlab="distance")
+plot(wTCPUp_variogram$exp_var$gamma~wTCPUp_variogram$exp_var$dist, type="l", lwd=4, ylim=c(0,0.07), col="steelblue3", ylab="semi-varience", xlab="distance")
+```
