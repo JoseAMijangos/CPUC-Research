@@ -7,7 +7,9 @@ output: html_document
 
 ```{r setup, include=FALSE}
 knitr::opts_chunk$set(echo = TRUE)
-source("C:\\Users\\josem\\Desktop\\geo.R")
+library(ggmap)
+library(grid)
+library(geosphere)
 library(automap)
 library(e1071)
 ```
@@ -25,7 +27,7 @@ vector_avg = function(x1, x2) {
 ## Read Data
 ```{r}
 # Field Test Data
-dat_raw = read.csv("C:\\Users\\josem\\Desktop\\CPUC-research\\Round12_Results_2017.csv")
+dat_raw = read.csv("C:\\Users\\Josemij39\\Desktop\\CPUC-research\\Round12_Results_2017.csv")
 ```
 
 ## Preprocess Data
@@ -59,8 +61,53 @@ dat_tmobile = dat[dat$Provider == "T-Mobile" & dat$DeviceType=="Phone",]
 dat_verizon = dat[dat$Provider == "Verizon" & dat$DeviceType=="Phone",]
 ```
 
+## Plots
+```{r}
+load("Califonia")
+
+rural = ggmap(map)
+rural = rural +   geom_point(data=dat[dat$Type == "Non-Rural",], aes(x=NormalLONG,y=NormalLAT  ), fill="cornflowerblue", pch=21, colour="black", size=1.5)
+rural
+
+non_rural = ggmap(map)
+non_rural = non_rural + geom_point(data=dat[dat$Type == "Rural",], aes(x=NormalLONG,y=NormalLAT  ), fill="red", pch=21, colour="black", size=1.5)
+non_rural
+
+tribal = ggmap(map)
+tribal = tribal + geom_point(data=dat[dat$Type == "Tribal",], aes(x=NormalLONG,y=NormalLAT  ), fill="green", pch=21, colour="black", size=1.5)
+tribal
+```
+
+```{r}
+p1 = ggmap(map)
+p1 = p1 + 
+    geom_point(data=dat_att, aes(x=Longitude,y=Latitude,color=wMOS), size=1.5) +
+  scale_colour_gradientn(colors=rainbow(20)[c(14:11,8,6,3:1)])
+p1
+
+p2 = ggmap(map)
+p2 = p2 + 
+  geom_point(data=dat_att[dat_att$SigStrength != 0,], aes(x=Longitude,y=Latitude,color=SigStrength), size=1.5) +
+  scale_colour_gradientn(colors=rainbow(20)[c(14:11,8,6,3:1)])
+p2
+
+p3 = ggmap(map)
+p3 = p3 + 
+  geom_point(data=dat_att, aes(x=Longitude,y=Latitude,color=wTCPDown/1000), size=1.5) +
+  scale_colour_gradientn(colors=rainbow(20)[c(14:11,8,6,3:1)])
+p3
+
+p4 = ggmap(map)
+p4 = p4 + 
+  geom_point(data=dat_att, aes(x=Longitude,y=Latitude,color=wTCPUp/1000), size=1.5) +
+  scale_colour_gradientn(colors=rainbow(20)[c(14:11,8,6,3:1)])
+p4
+```
+
 ## Distance Matrix
 ```{r}
+distance = function(dat_att){
+  
 earth_radius_in_miles = 3959
 
 n = nrow(dat_att)
@@ -71,10 +118,31 @@ for (i in 1:n) {
   temp = matrix(as.numeric(rep(locs[i,], each=n)), nrow=n)
   gdist[i,] = distHaversine(temp, locs, r=earth_radius_in_miles)  
 }
+return(apply(gdist, 1, function(x) sort(x)[2]))
+}
+```
+
+```{r}
+hist(distance(dat_att), breaks = seq(0,100,2), main="Distance to nearest nieghbor\nRural and Urban")
+hist(distance(dat_att[dat_att$Type == "Rural",]), breaks = seq(0,100,2), main="Distance to nearest nieghbor\nRural")
+hist(distance(dat_att[dat_att$Type == "Non-Rural",]), breaks = seq(0,100,2), main="Distance to nearest nieghbor\nUrban")
 ```
 
 ## kNN Prediction Error
 ```{r}
+prediction_error = function(dat_att){
+
+earth_radius_in_miles = 3959
+
+n = nrow(dat_att)
+locs = as.matrix(dat_att[1:n,c("NormalLONG", "NormalLAT")])
+gdist = matrix(rep(NA, n*n), ncol=n)
+
+for (i in 1:n) {
+  temp = matrix(as.numeric(rep(locs[i,], each=n)), nrow=n)
+  gdist[i,] = distHaversine(temp, locs, r=earth_radius_in_miles)  
+}
+
 Sig_knn_error = c()
 wMOS_knn_error = c()
 wTCPDown_knn_error = c()
@@ -120,28 +188,84 @@ for(l in 1:20) {
   wTCPDown_weighted_knn_error = c(wTCPDown_weighted_knn_error, median(abs(wTCPDown_knn_weighted_predictions - dat_att$wTCPDown)/1000))
   wTCPUp_weighted_knn_error = c(wTCPUp_weighted_knn_error, median(abs(wTCPUp_knn_weighted_predictions - dat_att$wTCPUp)/1000))
 }
+return(data.frame(Sig_knn_error, wMOS_knn_error, wTCPDown_knn_error, wTCPUp_knn_error, Sig_weighted_knn_error, wMOS_weighted_knn_error, wTCPDown_weighted_knn_error, wTCPUp_weighted_knn_error))
+}
+```
+
+```{r}
+att = prediction_error(dat_att)
+att_rural = prediction_error(dat_att[dat_att$Type == "Rural",])
+att_urban = prediction_error(dat_att[dat_att$Type == "Non-Rural",])
 ```
 
 ## kNN Plots
 ```{r}
 layout(matrix(c(1,2,3,4), 2, 2, byrow = TRUE))
-plot(Sig_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 10), pch=19, ylab="absolute prediction error", main="Median SigStrength Error")
-points(Sig_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+plot(att$Sig_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 10), pch=19, ylab="absolute prediction error", main="SigStrength Error")
+points(att$Sig_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
 abline(h = median(abs(dat_att$SigStrength - mean(dat_att$SigStrength))), lty = 2, col = "red", lwd=3)
 grid()
 
-plot(wMOS_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 0.1), pch=19, ylab="absolute prediction error", main="Median wMOS Error")
-points(wMOS_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+plot(att$wMOS_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 0.1), pch=19, ylab="absolute prediction error", main="wMOS Error")
+points(att$wMOS_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
 abline(h = median(abs(dat_att$wMOS - mean(dat_att$wMOS))), lty = 2, col = "red", lwd=3)
 grid()
 
-plot(wTCPDown_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 12), pch=19, ylab="absolute prediction error", main="Median wTCPDown Error")
-points(wTCPDown_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+plot(att$wTCPDown_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 12), pch=19, ylab="absolute prediction error", main="wTCPDown Error")
+points(att$wTCPDown_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
 abline(h = median(abs(dat_att$wTCPDown - mean(dat_att$wTCPDown)))/1000, lty = 2, col = "red", lwd=3)
 grid()
 
-plot(wTCPUp_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 6.5), pch=19, ylab="absolute prediction error", main="Median wTCPUp Error")
-points(wTCPUp_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+plot(att$wTCPUp_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 6.5), pch=19, ylab="absolute prediction error", main="wTCPUp Error")
+points(att$wTCPUp_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+abline(h = median(abs(dat_att$wTCPUp - mean(dat_att$wTCPUp)))/1000, lty = 2, col = "red", lwd=3)
+grid()
+```
+
+## kNN Rural
+```{r}
+layout(matrix(c(1,2,3,4), 2, 2, byrow = TRUE))
+plot(att_rural$Sig_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 10), pch=19, ylab="absolute prediction error", main="Rural SigStrength Error")
+points(att_rural$Sig_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+abline(h = median(abs(dat_att$SigStrength - mean(dat_att$SigStrength))), lty = 2, col = "red", lwd=3)
+grid()
+
+plot(att_rural$wMOS_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 0.1), pch=19, ylab="absolute prediction error", main="Rural wMOS Error")
+points(att_rural$wMOS_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+abline(h = median(abs(dat_att$wMOS - mean(dat_att$wMOS))), lty = 2, col = "red", lwd=3)
+grid()
+
+plot(att_rural$wTCPDown_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 12), pch=19, ylab="absolute prediction error", main="Rural wTCPDown Error")
+points(att_rural$wTCPDown_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+abline(h = median(abs(dat_att$wTCPDown - mean(dat_att$wTCPDown)))/1000, lty = 2, col = "red", lwd=3)
+grid()
+
+plot(att_rural$wTCPUp_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 6.5), pch=19, ylab="absolute prediction error", main="Rural wTCPUp Error")
+points(att_rural$wTCPUp_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+abline(h = median(abs(dat_att$wTCPUp - mean(dat_att$wTCPUp)))/1000, lty = 2, col = "red", lwd=3)
+grid()
+```
+
+## kNN Urban
+```{r}
+layout(matrix(c(1,2,3,4), 2, 2, byrow = TRUE))
+plot(att_urban$Sig_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 10), pch=19, ylab="absolute prediction error", main="Urban SigStrength Error")
+points(att_urban$Sig_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+abline(h = median(abs(dat_att$SigStrength - mean(dat_att$SigStrength))), lty = 2, col = "red", lwd=3)
+grid()
+
+plot(att_urban$wMOS_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 0.1), pch=19, ylab="absolute prediction error", main="Urban wMOS Error")
+points(att_urban$wMOS_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+abline(h = median(abs(dat_att$wMOS - mean(dat_att$wMOS))), lty = 2, col = "red", lwd=3)
+grid()
+
+plot(att_urban$wTCPDown_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 12), pch=19, ylab="absolute prediction error", main="Urban wTCPDown Error")
+points(att_urban$wTCPDown_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+abline(h = median(abs(dat_att$wTCPDown - mean(dat_att$wTCPDown)))/1000, lty = 2, col = "red", lwd=3)
+grid()
+
+plot(att_urban$wTCPUp_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 6.5), pch=19, ylab="absolute prediction error", main="Urban wTCPUp Error")
+points(att_urban$wTCPUp_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
 abline(h = median(abs(dat_att$wTCPUp - mean(dat_att$wTCPUp)))/1000, lty = 2, col = "red", lwd=3)
 grid()
 ```
@@ -160,25 +284,21 @@ kNN = function(X_test, k, data){
 }
 ```
 
-```{r}
-X_test = dat_att[100:103,c("NormalLONG", "NormalLAT")]
-kNN(X_test, 10, dat_att)
-dat_att$wTCPDown[100:103]
-```
-
 ## Heat Maps
 ```{r collapse=TRUE, warning=FALSE, message=FALSE}
 ca=map_data('state', region='California')
 
 ctrl = dat_att
 
-xrang=seq(-124.5,-114,.05)
-yrang=seq(32.5,42.25,.05)
+xrang=seq(-124.5,-114,.1)
+yrang=seq(32.5,42.25,.1)
 
 xtarg=c()
 ytarg=c()
 
-zhat_knn=matrix(0,length(xrang),length(yrang))
+zhat_knn1=matrix(0,length(xrang),length(yrang))
+zhat_knn5=matrix(0,length(xrang),length(yrang))
+zhat_knn10=matrix(0,length(xrang),length(yrang))
 
 for(j in 1:length(yrang)){
   for(i in 1:length(xrang)){
@@ -193,35 +313,44 @@ for(j in 1:length(yrang)){
   }
 }
 
-ztarg_knn = kNN(data.frame(NormalLONG=xtarg[!is.na(xtarg)], NormalLAT=ytarg[!is.na(ytarg)]), 10, ctrl)
+ztarg_knn1 = kNN(data.frame(NormalLONG=xtarg[!is.na(xtarg)], NormalLAT=ytarg[!is.na(ytarg)]), 1, ctrl)
+ztarg_knn5 = kNN(data.frame(NormalLONG=xtarg[!is.na(xtarg)], NormalLAT=ytarg[!is.na(ytarg)]), 5, ctrl)
+ztarg_knn10 = kNN(data.frame(NormalLONG=xtarg[!is.na(xtarg)], NormalLAT=ytarg[!is.na(ytarg)]), 10, ctrl)
 
 t=0
 for(j in 1:length(yrang)){
   for(i in 1:length(xrang)){
     if(point.in.polygon(xrang[i], yrang[j], ca$long, ca$lat)){
       t=t+1
-      zhat_knn[i,j]=ztarg_knn[t]
+      zhat_knn1[i,j]=ztarg_knn1[t]
+      zhat_knn5[i,j]=ztarg_knn5[t]
+      zhat_knn10[i,j]=ztarg_knn10[t]
     }
     else{
-      zhat_knn[i,j]=0
+      zhat_knn1[i,j]=0
+      zhat_knn5[i,j]=0
+      zhat_knn10[i,j]=0
     }
   }
 }
 ```
 
 ```{r collapse=TRUE, warning=FALSE, message=FALSE}
-layout(matrix(1:2,ncol=2), width = c(3,3,3),height = c(1,1))
+layout(matrix(1:3,ncol=3), width = c(3,3,3),height = c(1,1))
 
-ca=map_data('state', region='California')
-plot(dat_att$NormalLAT ~ dat_att$NormalLONG, col=rainbow(80)[51:1][floor(dat_att$wTCPDown/max(dat_att$wTCPDown)*60)+1], pch=19, xlab="Longitude", ylab="Latitude", main="wTCPDown")
+image(xrang, yrang, zhat_knn1, col=rainbow(80)[51:5], xlab="Longitude", ylab="Latitude", main="k Nearest Nieghbor k=1")
 lines(ca, lwd=2)
 
-image(xrang, yrang, zhat_knn, col=rainbow(80)[51:1], xlab="Longitude", ylab="Latitude", main="k Nearest Nieghbor")
+image(xrang, yrang, zhat_knn5, col=rainbow(80)[51:5], xlab="Longitude", ylab="Latitude", main="k Nearest Nieghbor k=5")
+lines(ca, lwd=2)
+
+image(xrang, yrang, zhat_knn10, col=rainbow(80)[51:5], xlab="Longitude", ylab="Latitude", main="k Nearest Nieghbor k=10")
 lines(ca, lwd=2)
 ```
 
 ## Variograms
 ```{r collapse=TRUE, warning=FALSE, message=FALSE}
+temp = dat_att
 coordinates(dat_att) =~ NormalLONG + NormalLAT
 Sig_variogram = autofitVariogram(SigStrength/min(SigStrength)~1, dat_att, verbose=FALSE)
 wMOS_variogram = autofitVariogram(wMOS/max(wMOS)~1,dat_att, verbose=FALSE)
@@ -233,4 +362,76 @@ plot(Sig_variogram$exp_var$gamma~Sig_variogram$exp_var$dist, type="l", lwd=4, yl
 plot(wMOS_variogram$exp_var$gamma~Sig_variogram$exp_var$dist, type="l", lwd=4, ylim=c(0,0.07), col="steelblue3", ylab="semi-varience", xlab="distance")
 plot(wTCPDown_variogram$exp_var$gamma~Sig_variogram$exp_var$dist, type="l", lwd=4, ylim=c(0,0.07), col="steelblue3", ylab="semi-varience", xlab="distance")
 plot(wTCPUp_variogram$exp_var$gamma~wTCPUp_variogram$exp_var$dist, type="l", lwd=4, ylim=c(0,0.07), col="steelblue3", ylab="semi-varience", xlab="distance")
+```
+
+### Kriging Maps
+```{r collapse=TRUE, warning=FALSE, message=FALSE}
+krige_att = autoKrige(wTCPDown/max(wTCPDown) ~ 1, dat_att)
+krige_att1 = autoKrige(wTCPDown/max(wTCPDown) ~ 1, dat_att, start_vals = c(NA,12.1,NA))
+krige_att2 = autoKrige(wTCPDown/max(wTCPDown) ~ 1, dat_att, start_vals = c(NA,12.2,NA))
+```
+
+```{r collapse=TRUE, warning=FALSE, message=FALSE}
+krige_att$krige_output@data$var1.pred = krige_att$krige_output@data$var1.pred * max(dat_att$wTCPDown)
+plot(krige_att$krige_output, col=rainbow(80)[51:5])
+lines(ca, lwd=2)
+
+krige_att1$krige_output@data$var1.pred = krige_att1$krige_output@data$var1.pred * max(dat_att$wTCPDown)
+plot(krige_att1$krige_output, col=rainbow(80)[51:5])
+lines(ca, lwd=2)
+
+krige_att2$krige_output@data$var1.pred = krige_att2$krige_output@data$var1.pred * max(dat_att$wTCPDown)
+plot(krige_att2$krige_output, col=rainbow(80)[51:5])
+lines(ca, lwd=2)
+```
+
+```{r}
+dat_att = temp
+sample_error = function(target){
+  target = dat_att[,target]
+  means = c()
+  errors = c()
+  for(i in seq(50, nrow(dat_att), 50)+8){
+    for(j in 1:1000){
+      sam = sample(target, i, replace=FALSE)
+      means = c(means, mean(sam))
+    }
+    errors = c(errors, 2*sd(means))
+    means = c()
+  }
+
+  return(errors)
+}
+```
+
+```{r}
+par(mar=c(5,5,3,2))
+plot(sample_error("wTCPDown")/1000 ~ seq(50, nrow(dat_att), 50), ylim = c(0, 2), xlab="sample size\n(1000 trails per sample size)", main="wTCPDown by sample size", ylab="2 * Standard deviation (Mb/s)", type="b", lwd=2)
+abline(h=(1.1*mean(dat_att$wTCPDown) - mean(dat_att$wTCPDown))/1000, col="red", lty=2, lwd=2)
+abline(h=(1.05*mean(dat_att$wTCPDown) - mean(dat_att$wTCPDown))/1000, col="orange", lty=2, lwd=2)
+abline(h=(1.01*mean(dat_att$wTCPDown) - mean(dat_att$wTCPDown))/1000, col="green", lty=2, lwd=2)
+```
+
+```{r}
+par(mar=c(5,5,3,2))
+plot(sample_error("wTCPUp")/1000 ~ seq(50, nrow(dat_att), 50), ylim = c(0, 1), xlab="sample size\n(1000 trails per sample size)", main="wTCPUp by sample size", ylab="2 * Standard deviation (Mb/s)", type="b", lwd=2)
+abline(h=(1.1*mean(dat_att$wTCPUp) - mean(dat_att$wTCPUp))/1000, col="red", lty=2, lwd=2)
+abline(h=(1.05*mean(dat_att$wTCPUp) - mean(dat_att$wTCPUp))/1000, col="orange", lty=2, lwd=2)
+abline(h=(1.01*mean(dat_att$wTCPUp) - mean(dat_att$wTCPUp))/1000, col="green3", lty=2, lwd=2)
+```
+
+```{r}
+par(mar=c(5,5,3,2))
+plot(sample_error("SigStrength") ~ seq(50, nrow(dat_att), 50), ylim = c(0, 10), xlab="sample size\n(1000 trails per sample size)", main="SigStrength by sample size", ylab="2 * Standard deviation", type="b", lwd=2)
+abline(h=0.9*mean(dat_att$SigStrength) - mean(dat_att$SigStrength), col="red", lty=2, lwd=2)
+abline(h=0.95*mean(dat_att$SigStrength) - mean(dat_att$SigStrength), col="orange", lty=2, lwd=2)
+abline(h=0.99*mean(dat_att$SigStrength) - mean(dat_att$SigStrength), col="green3", lty=2, lwd=2)
+```
+
+```{r}
+par(mar=c(5,5,3,2))
+plot(sample_error("wMOS") ~ seq(50, nrow(dat_att), 50), ylim = c(0, 0.5), xlab="sample size\n(1000 trails per sample size)", main="wMOS by sample size", ylab="2 * Standard deviation", type="b", lwd=2)
+abline(h=1.1*mean(dat_att$wMOS) - mean(dat_att$wMOS), col="red", lty=2, lwd=2)
+abline(h=1.05*mean(dat_att$wMOS) - mean(dat_att$wMOS), col="orange", lty=2, lwd=2)
+abline(h=1.01*mean(dat_att$wMOS) - mean(dat_att$wMOS), col="green3", lty=2, lwd=2)
 ```
