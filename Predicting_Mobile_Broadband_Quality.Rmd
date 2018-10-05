@@ -123,9 +123,8 @@ return(apply(gdist, 1, function(x) sort(x)[2]))
 ```
 
 ```{r}
-hist(distance(dat_att), breaks = seq(0,100,2), main="Distance to nearest nieghbor\nRural and Urban")
-hist(distance(dat_att[dat_att$Type == "Rural",]), breaks = seq(0,100,2), main="Distance to nearest nieghbor\nRural")
-hist(distance(dat_att[dat_att$Type == "Non-Rural",]), breaks = seq(0,100,2), main="Distance to nearest nieghbor\nUrban")
+plot(density(distance(dat_att[dat_att$Type == "Non-Rural",])), main="Distance to nearest nieghbor", lwd =3, col="blue")
+lines(density(distance(dat_att[dat_att$Type == "Rural",])), main="Distance to nearest nieghbor\nUrban", col="green3", lwd=3)
 ```
 
 ## kNN Prediction Error
@@ -201,23 +200,27 @@ att_urban = prediction_error(dat_att[dat_att$Type == "Non-Rural",])
 ## kNN Plots
 ```{r}
 layout(matrix(c(1,2,3,4), 2, 2, byrow = TRUE))
-plot(att$Sig_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 10), pch=19, ylab="absolute prediction error", main="SigStrength Error")
-points(att$Sig_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+plot(att$Sig_knn_error, type = "b", col="black", lwd=3, xlab = "k", ylim=c(6, 11), pch=19, ylab="absolute prediction error", main="SigStrength Error")
+points(att_rural$Sig_knn_error, type = "b", col="green3", lwd=3, pch=19)
+points(att_urban$Sig_knn_error, type = "b", col="blue", lwd=3, pch=19)
 abline(h = median(abs(dat_att$SigStrength - mean(dat_att$SigStrength))), lty = 2, col = "red", lwd=3)
 grid()
 
-plot(att$wMOS_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 0.1), pch=19, ylab="absolute prediction error", main="wMOS Error")
-points(att$wMOS_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+plot(att$wMOS_knn_error, type = "b", col="black", lwd=3, xlab = "k", ylim=c(0, 0.1), pch=19, ylab="absolute prediction error", main="wMOS Error")
+points(att_rural$wMOS_knn_error, type = "b", col="green3", lwd=3, pch=19)
+points(att_urban$wMOS_knn_error, type = "b", col="blue", lwd=3, pch=19)
 abline(h = median(abs(dat_att$wMOS - mean(dat_att$wMOS))), lty = 2, col = "red", lwd=3)
 grid()
 
-plot(att$wTCPDown_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 12), pch=19, ylab="absolute prediction error", main="wTCPDown Error")
-points(att$wTCPDown_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+plot(att$wTCPDown_knn_error, type = "b", col="black", lwd=3, xlab = "k", ylim=c(8, 12), pch=19, ylab="absolute prediction error", main="wTCPDown Error")
+points(att_rural$wTCPDown_knn_error, type = "b", col="green3", lwd=3, pch=19)
+points(att_urban$wTCPDown_knn_error, type = "b", col="blue", lwd=3, pch=19)
 abline(h = median(abs(dat_att$wTCPDown - mean(dat_att$wTCPDown)))/1000, lty = 2, col = "red", lwd=3)
 grid()
 
-plot(att$wTCPUp_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 6.5), pch=19, ylab="absolute prediction error", main="wTCPUp Error")
-points(att$wTCPUp_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+plot(att$wTCPUp_knn_error, type = "b", col="black", lwd=3, xlab = "k", ylim=c(4, 7), pch=19, ylab="absolute prediction error", main="wTCPUp Error")
+points(att_rural$wTCPUp_knn_error, type = "b", col="green3", lwd=3, pch=19)
+points(att_urban$wTCPUp_knn_error, type = "b", col="blue", lwd=3, pch=19)
 abline(h = median(abs(dat_att$wTCPUp - mean(dat_att$wTCPUp)))/1000, lty = 2, col = "red", lwd=3)
 grid()
 ```
@@ -225,47 +228,27 @@ grid()
 ## kNN Rural
 ```{r}
 layout(matrix(c(1,2,3,4), 2, 2, byrow = TRUE))
-plot(att_rural$Sig_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 10), pch=19, ylab="absolute prediction error", main="Rural SigStrength Error")
-points(att_rural$Sig_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+plot(att$Sig_weighted_knn_error, type = "b", col="black", lwd=3, xlab = "k", ylim=c(6, 11), pch=19, ylab="absolute prediction error", main="SigStrength Error")
+points(att_rural$Sig_weighted_knn_error, type = "b", col="green3", lwd=3, pch=19)
+points(att_urban$Sig_weighted_knn_error, type = "b", col="blue", lwd=3, pch=19)
 abline(h = median(abs(dat_att$SigStrength - mean(dat_att$SigStrength))), lty = 2, col = "red", lwd=3)
 grid()
 
-plot(att_rural$wMOS_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 0.1), pch=19, ylab="absolute prediction error", main="Rural wMOS Error")
-points(att_rural$wMOS_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+plot(att$wMOS_weighted_knn_error, type = "b", col="black", lwd=3, xlab = "k", ylim=c(0, 0.1), pch=19, ylab="absolute prediction error", main="wMOS Error")
+points(att_rural$wMOS_weighted_knn_error, type = "b", col="green3", lwd=3, pch=19)
+points(att_urban$wMOS_weighted_knn_error, type = "b", col="blue", lwd=3, pch=19)
 abline(h = median(abs(dat_att$wMOS - mean(dat_att$wMOS))), lty = 2, col = "red", lwd=3)
 grid()
 
-plot(att_rural$wTCPDown_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 12), pch=19, ylab="absolute prediction error", main="Rural wTCPDown Error")
-points(att_rural$wTCPDown_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+plot(att$wTCPDown_weighted_knn_error, type = "b", col="black", lwd=3, xlab = "k", ylim=c(8, 12), pch=19, ylab="absolute prediction error", main="wTCPDown Error")
+points(att_rural$wTCPDown_weighted_knn_error, type = "b", col="green3", lwd=3, pch=19)
+points(att_urban$wTCPDown_weighted_knn_error, type = "b", col="blue", lwd=3, pch=19)
 abline(h = median(abs(dat_att$wTCPDown - mean(dat_att$wTCPDown)))/1000, lty = 2, col = "red", lwd=3)
 grid()
 
-plot(att_rural$wTCPUp_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 6.5), pch=19, ylab="absolute prediction error", main="Rural wTCPUp Error")
-points(att_rural$wTCPUp_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
-abline(h = median(abs(dat_att$wTCPUp - mean(dat_att$wTCPUp)))/1000, lty = 2, col = "red", lwd=3)
-grid()
-```
-
-## kNN Urban
-```{r}
-layout(matrix(c(1,2,3,4), 2, 2, byrow = TRUE))
-plot(att_urban$Sig_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 10), pch=19, ylab="absolute prediction error", main="Urban SigStrength Error")
-points(att_urban$Sig_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
-abline(h = median(abs(dat_att$SigStrength - mean(dat_att$SigStrength))), lty = 2, col = "red", lwd=3)
-grid()
-
-plot(att_urban$wMOS_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 0.1), pch=19, ylab="absolute prediction error", main="Urban wMOS Error")
-points(att_urban$wMOS_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
-abline(h = median(abs(dat_att$wMOS - mean(dat_att$wMOS))), lty = 2, col = "red", lwd=3)
-grid()
-
-plot(att_urban$wTCPDown_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 12), pch=19, ylab="absolute prediction error", main="Urban wTCPDown Error")
-points(att_urban$wTCPDown_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
-abline(h = median(abs(dat_att$wTCPDown - mean(dat_att$wTCPDown)))/1000, lty = 2, col = "red", lwd=3)
-grid()
-
-plot(att_urban$wTCPUp_knn_error, type = "b", col="darkorange3", lwd=3, xlab = "k", ylim=c(0, 6.5), pch=19, ylab="absolute prediction error", main="Urban wTCPUp Error")
-points(att_urban$wTCPUp_weighted_knn_error, type = "b", col="steelblue2", lwd=3, pch=19)
+plot(att$wTCPUp_weighted_knn_error, type = "b", col="black", lwd=3, xlab = "k", ylim=c(4, 7), pch=19, ylab="absolute prediction error", main="wTCPUp Error")
+points(att_rural$wTCPUp_weighted_knn_error, type = "b", col="green3", lwd=3, pch=19)
+points(att_urban$wTCPUp_weighted_knn_error, type = "b", col="blue", lwd=3, pch=19)
 abline(h = median(abs(dat_att$wTCPUp - mean(dat_att$wTCPUp)))/1000, lty = 2, col = "red", lwd=3)
 grid()
 ```
@@ -405,30 +388,24 @@ sample_error = function(target){
 ```
 
 ```{r}
+layout(matrix(1:4,ncol=2), width = c(3,3,3),height = c(1,1))
+
 par(mar=c(5,5,3,2))
 plot(sample_error("wTCPDown")/1000 ~ seq(50, nrow(dat_att), 50), ylim = c(0, 2), xlab="sample size\n(1000 trails per sample size)", main="wTCPDown by sample size", ylab="2 * Standard deviation (Mb/s)", type="b", lwd=2)
 abline(h=(1.1*mean(dat_att$wTCPDown) - mean(dat_att$wTCPDown))/1000, col="red", lty=2, lwd=2)
 abline(h=(1.05*mean(dat_att$wTCPDown) - mean(dat_att$wTCPDown))/1000, col="orange", lty=2, lwd=2)
 abline(h=(1.01*mean(dat_att$wTCPDown) - mean(dat_att$wTCPDown))/1000, col="green", lty=2, lwd=2)
-```
 
-```{r}
-par(mar=c(5,5,3,2))
+plot(sample_error("SigStrength") ~ seq(50, nrow(dat_att), 50), ylim = c(0, 11), xlab="sample size\n(1000 trails per sample size)", main="SigStrength by sample size", ylab="2 * Standard deviation", type="b", lwd=2)
+abline(h=0.9*mean(dat_att$SigStrength) - mean(dat_att$SigStrength), col="red", lty=2, lwd=2)
+abline(h=0.95*mean(dat_att$SigStrength) - mean(dat_att$SigStrength), col="orange", lty=2, lwd=2)
+abline(h=0.99*mean(dat_att$SigStrength) - mean(dat_att$SigStrength), col="green3", lty=2, lwd=2)
+
 plot(sample_error("wTCPUp")/1000 ~ seq(50, nrow(dat_att), 50), ylim = c(0, 1), xlab="sample size\n(1000 trails per sample size)", main="wTCPUp by sample size", ylab="2 * Standard deviation (Mb/s)", type="b", lwd=2)
 abline(h=(1.1*mean(dat_att$wTCPUp) - mean(dat_att$wTCPUp))/1000, col="red", lty=2, lwd=2)
 abline(h=(1.05*mean(dat_att$wTCPUp) - mean(dat_att$wTCPUp))/1000, col="orange", lty=2, lwd=2)
 abline(h=(1.01*mean(dat_att$wTCPUp) - mean(dat_att$wTCPUp))/1000, col="green3", lty=2, lwd=2)
-```
 
-```{r}
-par(mar=c(5,5,3,2))
-plot(sample_error("SigStrength") ~ seq(50, nrow(dat_att), 50), ylim = c(0, 10), xlab="sample size\n(1000 trails per sample size)", main="SigStrength by sample size", ylab="2 * Standard deviation", type="b", lwd=2)
-abline(h=0.9*mean(dat_att$SigStrength) - mean(dat_att$SigStrength), col="red", lty=2, lwd=2)
-abline(h=0.95*mean(dat_att$SigStrength) - mean(dat_att$SigStrength), col="orange", lty=2, lwd=2)
-abline(h=0.99*mean(dat_att$SigStrength) - mean(dat_att$SigStrength), col="green3", lty=2, lwd=2)
-```
-
-```{r}
 par(mar=c(5,5,3,2))
 plot(sample_error("wMOS") ~ seq(50, nrow(dat_att), 50), ylim = c(0, 0.5), xlab="sample size\n(1000 trails per sample size)", main="wMOS by sample size", ylab="2 * Standard deviation", type="b", lwd=2)
 abline(h=1.1*mean(dat_att$wMOS) - mean(dat_att$wMOS), col="red", lty=2, lwd=2)
