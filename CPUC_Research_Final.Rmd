@@ -1,0 +1,526 @@
+---
+title: "Ordinary-Kriging"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(ggplot2)
+library(geosphere)
+library(sp)
+```
+
+## Introduction
+The CPUC field test data is a collection of mobile broadband samples across California. We will prepare the data for spatial interpolation, then we will compare the predictive quality of various spatial models such as k nearest neighbor, inverse distance weighting, and ordinary Kriging.
+
+## Utility Functioins
+```{r}
+# Returns average and reduces NA values
+vector_average = function(x1, x2) {
+  x = apply(data.frame(x1, x2), 1, function(x) mean(na.omit(x)))
+  x[is.nan(x)] = NA
+  return(x)
+}
+
+# Returns distances between target points and data points
+distance_matrix = function(targets, data){
+  distances = apply(targets, 1, function(x) distHaversine(matrix(as.numeric(rep(x, each=nrow(data))), nrow=nrow(data)), as.matrix(data), r=3958.8))
+  return(distances)
+}
+
+# Returns estimated emperical variogram points
+generate_variogram = function(gdist, z, h_delta = 1, radius = 0.5, max=15) {
+  h_values = seq(0 + radius, max, h_delta)
+  gamma = rep(NA, length(h_values))
+  for (i in 1:length(h_values)) {
+    loc_pairs = which(gdist > (h_values[i] - radius) & gdist < (h_values[i] + radius), arr.ind=TRUE)
+    #gamma[i] = 1/2*mean(apply(loc_pairs, 1, function(x) (z[x[1]] - z[x[2]])**2))
+    gamma[i] = 1/2*2.198*median(abs(apply(loc_pairs, 1, function(x) (z[x[1]] - z[x[2]]))))**2
+  }
+  return(data.frame(x=h_values, y=gamma))
+}
+
+# Mathimatical expression for variogram modeling
+spherical = function(h, a, s, r) {
+  if (h == 0) {
+    return(0)
+  }
+  else if (h <= r) {
+    return(a + s*((3/2)*(h/r)-(1/2)*(h/r)**3))
+  }
+  else if (h > r) {
+    return(a + s)
+  }
+}
+
+# Mathimatical expression for variogram modeling
+exponential = function(h, a, s, r) {
+  if (h == 0) {
+    return(0)
+  }
+  else if (h > 0) {
+    return(a + s*(1 - exp(-h/r)))
+  }
+}
+
+# Mathimatical expression for variogram modeling
+gaussian = function(h, a, s, r) {
+  if (h==0) {
+    return(0)
+  }
+  else if (h > 0) {
+    return(a + s*(1 - exp(-(h/a)**2)))
+  }
+}
+
+# Returns mean squared error
+mse = function(params, exp_var, f){
+  prediction = rep(NA, nrow(exp_var))
+  actual = exp_var$y
+  for(i in 1:nrow(exp_var)){
+    prediction[i] = f(exp_var$x[i], params[1], params[2], params[3])
+  }
+  return(mean((actual - prediction)**2))
+}
+
+# Finds value x that minimizes f(x) with gradient descent
+gradient_descent = function (x0, exp_var, f, delta=0.0001, alpha=0.0001, limit=10000, thresh = 0.0001) {
+  x = x0
+  n = length(x0)
+  for(j in 1:limit) {
+    grad = sapply(1:n, function(i) (mse(replace(x, i, x[i] + delta), exp_var, f) - mse(x, exp_var, f)) / delta)
+    x = x - alpha*grad
+    if(max(abs(x - x0)) < thresh) {
+      break
+    }
+    x0 = x
+  }
+  return(x)
+}
+```
+
+## Load Data
+```{r}
+# Load data
+#dat_raw = read.csv("https://raw.githubusercontent.com/grbruns/CPUC_data/master/Round12_Results_Final_20171120.csv")
+dat_raw = read.csv("./Round12_Results_2017.csv")
+```
+
+## Preprocess Data
+```{r collapse=TRUE, warning=FALSE, message=FALSE}
+# Convert to numeric
+dat = as.data.frame(apply(dat_raw, 2, as.numeric))
+
+# Restore factors
+dat$Provider = dat_raw$Provider
+dat$Network = dat_raw$Network
+dat$DeviceType = dat_raw$DeviceType
+dat$Type = dat_raw$Type
+
+# Aggregate TCP values
+dat$wTCPUp = vector_average(dat$wTCPUp1, dat$wTCPUp2)
+dat$wTCPDown = vector_average(dat$wTCPDown1, dat$wTCPDown2)
+dat$eTCPUp = vector_average(dat$eTCPUp1, dat$eTCPUp2)
+dat$eTCPDown = vector_average(dat$eTCPDown1, dat$eTCPDown2)
+
+# Filter data
+Network = "LTE"
+DeviceType = "Phone"
+dat = dat[dat$Network == Network & dat$DeviceType == DeviceType, c("LocationID", "Latitude", "Longitude", "NormalLONG", "NormalLAT", "Provider", "Network", "DeviceType", "Type", "SigStrength", "SNR", "wTCPDown", "wTCPUp", "eTCPDown", "eTCPUp")]
+
+# Remove tuples with bad values
+dat = dat[dat$Longitude < -100,]
+dat = na.omit(dat)
+```
+
+## Select Dataset
+```{r}
+Provider = "Verizon"
+Signal = "wTCPDown"
+
+# Filter data by Provider and Signal
+type = dat$Type[dat$Provider==Provider]
+X = data.frame(logitude = dat$NormalLONG[dat$Provider==Provider], latitude = dat$NormalLAT[dat$Provider==Provider]) 
+z = dat[,Signal][dat$Provider==Provider]
+z = z/1000
+
+# Remove bad signal values
+type = dat$Type[dat$Provider==Provider]
+type = type[z!=0]
+X = X[z!=0,]
+z = z[z!=0]
+
+# Create datasets for urban and rural
+X_urban = X[type == "Non-Rural",]
+z_urban = z[type == "Non-Rural"]
+X_rural = X[type == "Rural",]
+z_rural = z[type == "Rural"]
+```
+
+## Broadband Values 
+```{r}
+# Scatterplot of signal values
+v = ggplot(X, aes(x=logitude, y=latitude, color=z)) + geom_point(size=2) + scale_color_distiller(palette="Spectral")
+v + ggtitle(paste(Provider, "LTE")) + labs(color=paste(Signal, "\n(Mb/s)"))
+
+# Density plot of signal values
+plot(density(z_urban), lwd=2, main=paste(Provider, "LTE", Signal, "Values"), col="cornflowerblue")
+lines(density(z), lwd=2)
+lines(density(z_rural), lwd=2, col="darkorange2")
+```
+
+```{r collapse=TRUE, warning=FALSE, message=FALSE}
+baseline_mean = mean(abs(mean(z) - z)**2)
+baseline_mean_urban = mean(abs(mean(z_urban) - z_urban)**2)
+baseline_mean_rural = mean(abs(mean(z_rural) - z_rural)**2)
+
+gdist_agg = distance_matrix(X, X)
+gdist_rural = distance_matrix(X_rural, X_rural)
+gdist_urban = distance_matrix(X_urban, X_urban)
+
+k = seq(5,50,5)
+```
+
+## KNN analysis
+```{r}
+# kNN algorthim for spatial interpolation and cross validation
+kNN = function(z, neighbors, gdist) {
+  return(apply(gdist, 2, function(x) kNN_helper(x, z, neighbors)))
+}
+
+kNN_helper = function(x, z, neighbors) {
+  kNearest = order(x)[neighbors]
+  return(mean(z[kNearest]))
+}
+
+kNN_crossvalidation = function(gdist, z, neighbors) {
+  return(apply(gdist, 1, function(x) kNN_helper(x, z, neighbors)))
+}
+```
+
+
+```{r}
+# Aggregate kNN prediction error 
+kNN_error = sapply(k, function(x) abs(z - kNN_crossvalidation(gdist_agg, z, (1:x)+1))**2)
+kNN_error_mean = apply(kNN_error, 2, mean)
+
+# Urban kNN prediction error 
+kNN_error_urban = sapply(k, function(x) abs(z_urban - kNN_crossvalidation(gdist_urban, z_urban, (1:x)+1))**2)
+kNN_error_mean_urban = apply(kNN_error_urban, 2, mean)
+
+# Rural kNN prediction error 
+kNN_error_rural = sapply(k, function(x) abs(z_rural - kNN_crossvalidation(gdist_rural, z_rural, (1:x)+1))**2)
+kNN_error_mean_rural = apply(kNN_error_rural, 2, mean)
+
+# Setup and plot
+par(mfrow=c(1,1), oma=c(1, 5, 2, 5))
+ylim_mean=c(min(baseline_mean, kNN_error_mean, kNN_error_mean_urban, kNN_error_mean_rural), 
+            max(baseline_mean, kNN_error_mean, kNN_error_mean_urban, kNN_error_mean_rural))
+plot(k, kNN_error_mean, type="b", lwd=2, pch=19, main="kNN Model", ylab="mean squared error", xlab="neighbors", ylim=ylim_mean)
+points(k, kNN_error_mean_urban, type="b", lwd=2, pch=19, col="cornflowerblue")
+points(k, kNN_error_mean_rural, type="b", lwd=2, pch=19, col="darkorange2")
+abline(h=baseline_mean, col="red", lwd=3)
+mtext(paste(Provider, "LTE", Signal), outer = TRUE, cex = 1.5)
+```
+
+## Weighted KNN analysis
+```{r}
+# Weighted kNN algorthim for spatial interpolation and cross validation
+weighted_kNN = function(z, neighbors, gdist) {
+  return(apply(gdist, 2, function(x) weighted_kNN_helper(x, z, neighbors)))
+}
+
+weighted_kNN_helper = function(x, z, neighbors) {
+  kNearest = order(x)[neighbors]
+  weights = 1/x[kNearest]
+  weights = weights/sum(weights)
+  return(sum(weights * z[kNearest]))
+}
+
+weighted_kNN_crossvalidation = function(gdist, z, neighbors) {
+  predicted = apply(gdist, 1, function(x) weighted_kNN_helper(x, z, neighbors))
+  return(predicted)
+}
+```
+
+```{r collapse=TRUE, warning=FALSE, message=FALSE}
+# Aggregate weighted kNN prediction error 
+weighted_kNN_error = sapply(k, function(x) abs(z - weighted_kNN_crossvalidation(gdist_agg, z, (1:x)+1))**2)
+weighted_kNN_error_mean = apply(weighted_kNN_error, 2, mean)
+
+# Urban weighted kNN prediction error 
+weighted_kNN_error_urban = sapply(k, function(x) abs(z_urban - weighted_kNN_crossvalidation(gdist_urban, z_urban, (1:x)+1))**2)
+weighted_kNN_error_mean_urban = apply(weighted_kNN_error_urban, 2, mean)
+
+# Rural weighted kNN prediction error 
+weighted_kNN_error_rural = sapply(k, function(x) abs(z_rural - weighted_kNN_crossvalidation(gdist_rural, z_rural, (1:x)+1))**2)
+weighted_kNN_error_mean_rural = apply(weighted_kNN_error_rural, 2, mean)
+
+# Setup and plot
+par(mfrow=c(1,1), oma=c(1, 5, 2, 5))
+ylim_mean=c(min(baseline_mean, weighted_kNN_error_mean, weighted_kNN_error_mean_urban, weighted_kNN_error_mean_rural), 
+            max(baseline_mean, weighted_kNN_error_mean, weighted_kNN_error_mean_urban, weighted_kNN_error_mean_rural))
+
+plot(k, weighted_kNN_error_mean, type="b", lwd=2, pch=19, main="Weighted kNN Model Error", ylab="mean squared error", xlab="neighbors", ylim=ylim_mean)
+points(k, weighted_kNN_error_mean_urban, type="b", lwd=2, pch=19, col="cornflowerblue")
+points(k, weighted_kNN_error_mean_rural, type="b", lwd=2, pch=19, col="darkorange2")
+abline(h=baseline_mean, col="red", lwd=3)
+mtext(paste(Provider, "LTE", Signal), outer = TRUE, cex = 1.5)
+```
+
+## Experimental Variogram
+I found that setting h_delta = 1, radius = 2 produced nice variograms.
+
+```{r}
+exp_var = generate_variogram(gdist_agg, z, h_delta=3, radius=2, max=30)
+exp_var_rural = generate_variogram(gdist_rural, z_rural, h_delta=3, radius=2, max=30)
+exp_var_urban = generate_variogram(gdist_urban, z_urban, h_delta=3, radius=2, max=30)
+
+par(mfrow=c(1,3), oma=c(5, 0, 5, 0), mar=c(4,4,2,1))
+plot(exp_var$x, exp_var$y, type="b", lwd=2, ylim=c(0, max(exp_var$y, exp_var_urban$y, exp_var_rural$y)), main="Aggregate Variogram", xlab="distance (Miles)", ylab="semivarience")
+abline(h=var(z), col="red", lwd=2)
+plot(exp_var_urban$x, exp_var_urban$y, type="b", lwd=2, ylim=c(0, max(exp_var$y, exp_var_urban$y, exp_var_rural$y)), main="Urban Variogram", xlab="distance (Miles)", ylab="semivarience", col="cornflowerblue")
+abline(h=var(z_urban), col="red", lwd=2)
+plot(exp_var_rural$x, exp_var_rural$y, type="b", lwd=2, ylim=c(0, max(exp_var$y, exp_var_urban$y, exp_var_rural$y)), main="Rural Variogram", xlab="distance (Miles)", ylab="semivarience", col="darkorange2")
+abline(h=var(z_rural), col="red", lwd=2)
+mtext(paste0("Experimental Variograms\n", Provider, " LTE ", Signal), outer = TRUE, cex = 1.5)
+```
+
+## Fitted Variogram
+We can fit a mathimatical epression to the variogram with gradient decent by choosing appropriate starting params
+```{r}
+kernal = spherical
+
+# Adjusting parameters with gradient decent
+initial_params = c(exp_var$y[1], var(z) - exp_var$y[1], 10)
+params_agg = gradient_descent(initial_params, exp_var, kernal)
+initial_params = c(exp_var_urban$y[1], var(z_urban) - exp_var_urban$y[1], 10)
+params_urban = gradient_descent(initial_params, exp_var_urban, kernal)
+initial_params = c(exp_var_rural$y[1], var(z_rural) - exp_var_rural$y[1], 10)
+params_rural = gradient_descent(initial_params, exp_var_rural, kernal)
+```
+
+```{r}
+# Use params and spherical function to generate curve
+input = seq(0, 20, 0.5)
+output = sapply(input, function(x) kernal(x, params_agg[1], params_agg[2], params_agg[3]))
+output_urban = sapply(input, function(x) kernal(x, params_urban[1], params_urban[2], params_urban[3]))
+output_rural = sapply(input, function(x) kernal(x, params_rural[1], params_rural[2], params_rural[3]))
+
+# Experimental and fitted variogram
+par(mfrow=c(1,3), oma=c(5, 0, 5, 0), mar=c(4,4,2,1))
+plot(input, output, col="red", type="l", lwd=3, ylim=c(0, max(exp_var$y, exp_var_urban$y, exp_var_rural$y)), main="Aggregate Variogram", xlab="distance (Miles)", ylab="semivarience")
+points(exp_var$x, exp_var$y, type="b", lwd=2)
+plot(input, output_urban, col="red", type="l", lwd=3, ylim=c(0, max(exp_var$y, exp_var_urban$y, exp_var_rural$y)), main="Urban Variogram", xlab="distance (Miles)", ylab="semivarience")
+points(exp_var_urban$x, exp_var_urban$y, type="b", lwd=2, col="cornflowerblue")
+plot(input, output_rural, col="red", type="l", lwd=3, ylim=c(0, max(exp_var$y, exp_var_urban$y, exp_var_rural$y)), main="Rural Variogram", xlab="distance (Miles)", ylab="semivarience")
+points(exp_var_rural$x, exp_var_rural$y, type="b", lwd=2, col="darkorange2")
+mtext(paste("Fitted Variograms\n", Provider, "LTE", Signal), outer = TRUE, cex = 1.5)
+```
+
+## The Kriging Algorithm
+The idea behind kriging is that we can exploit the semivariences between points to set up a system of linear equations to solve for the desired weights.
+
+Kriging equation,
+A * λ = b
+λ = b * A^(-1)
+
+A = semivariences between sampled points to eachother (matrix)
+b = semivariences between sampled points to target point (vector)
+λ = desired weights (vector)
+
+```{r}
+Kriging_k = seq(5,50,5)
+
+# Kriging Algorithm for spatial interpolation
+Kriging = function(z, neighbors, params, gdist) {
+  predicted = apply(gdist, 2, function(x) Kriging_helper(x, z, neighbors, params, gdist_agg))
+  return(predicted)
+}
+
+Kriging_helper = function(x, z, neighbors, params, gdist) {
+  kNearest = order(x)[neighbors]
+  dist = gdist[kNearest, kNearest]
+  n = length(kNearest)
+  one = rep(1, n)
+  one.star = t(one)
+
+  # Solve Kriging equation for desired weights
+  C = -apply(dist, 1:2, function(x) kernal(x, params[1], params[2], params[3]))
+  C.inverse = solve(C)
+  b = -sapply(x[kNearest], function(x) kernal(x, params[1], params[2], params[3]))
+  w = C.inverse%*%b - (C.inverse%*%one%*%one.star%*%C.inverse%*%b) / rep((one.star%*%C.inverse%*%one), n) + (C.inverse%*%one)/rep((one.star%*%C.inverse%*%one), n)
+  
+  return(sum(w*z[kNearest]))
+}
+
+# Kriging Algorithm for crossvalidation
+Kriging_crossvalidation = function(gdist, z, neighbors, params) {
+  predicted = apply(gdist, 2, function(x) Kriging_helper(x, z, neighbors, params, gdist))
+  return(predicted)
+}
+```
+
+```{r}
+Kriging_error = sapply(Kriging_k, function(x) abs(z - Kriging_crossvalidation(gdist_agg, z, (1:x)+1, params_agg))**2)
+Kriging_error_mean = apply(Kriging_error, 2, mean)
+
+Kriging_error_urban = sapply(Kriging_k, function(x) abs(z_urban - Kriging_crossvalidation(gdist_urban, z_urban, (1:x)+1, params_urban))**2)
+Kriging_error_mean_urban = apply(Kriging_error_urban, 2, mean)
+
+Kriging_error_rural = sapply(Kriging_k, function(x) abs(z_rural - Kriging_crossvalidation(gdist_rural, z_rural, (1:x)+1, params_rural))**2)
+Kriging_error_mean_rural = apply(Kriging_error_rural, 2, mean)
+
+par(mfrow=c(1,1), oma=c(1, 5, 2, 5))
+ylim_mean=c(min(baseline_mean, Kriging_error_mean, Kriging_error_mean_urban, Kriging_error_mean_rural), 
+            max(baseline_mean, Kriging_error_mean, Kriging_error_mean_urban, Kriging_error_mean_rural))
+
+plot(Kriging_k, Kriging_error_mean, type="b", lwd=2, pch=19, main="Mean Kriging Error", ylab="mean squared error", xlab="neighbors", ylim=ylim_mean)
+points(Kriging_k, Kriging_error_mean_urban, type="b", lwd=2, pch=19, col="cornflowerblue")
+points(Kriging_k, Kriging_error_mean_rural, type="b", lwd=2, pch=19, col="darkorange2")
+abline(h=baseline_mean, col="red", lwd=3)
+mtext(paste(Provider, "LTE", Signal), outer = TRUE, cex = 1.5)
+```
+
+
+## Actual vs Predicted
+```{r}
+best_k_kNN = k[order(kNN_error_mean)[1]]
+best_k_weighted_kNN = k[order(weighted_kNN_error_mean)[1]]
+best_k_Kriging = Kriging_k[order(Kriging_error_mean)[1]]
+kNN_prediction = kNN(z, neighbors=(1:best_k_kNN)+1, gdist_agg)
+weighted_kNN_prediction = weighted_kNN(z, neighbors=(1:best_k_weighted_kNN)+1, gdist_agg)
+Kriging_prediction = Kriging(z, neighbors=(1:best_k_Kriging)+1, params_agg, gdist_agg)
+
+par(mfrow=c(1,3), oma=c(1, 1, 4, 1))
+plot(z, z, type="l", lwd=2, main=paste("kNN k=",best_k_kNN), xlab="actual", ylab="predicted", col="red")
+points(z, kNN_prediction, col="black")
+plot(z, z, type="l", lwd=2, main=paste("weighted kNN k=",best_k_weighted_kNN), xlab="actual", ylab="predicted", col="red")
+points(z, kNN_prediction, col="black")
+plot(z, z, type="l", lwd=2, main=paste("Ordinary Kriging k=",best_k_Kriging), xlab="actual", ylab="predicted", col="red")
+points(z, Kriging_prediction, col="black")
+mtext(paste(Provider, "LTE", Signal), outer = TRUE, cex = 1.5)
+
+best_k_kNN_urban = k[order(kNN_error_mean_urban)[1]]
+best_k_weighted_kNN_urban = k[order(weighted_kNN_error_mean_urban)[1]]
+best_k_Kriging_urban = Kriging_k[order(Kriging_error_mean_urban)[1]]
+kNN_prediction_urban = kNN(z_urban, neighbors=(1:best_k_kNN_urban)+1, gdist_urban)
+weighted_kNN_prediction_urban = weighted_kNN(z_urban, neighbors=(1:best_k_weighted_kNN_urban)+1, gdist_urban)
+Kriging_prediction_urban = Kriging(z_urban, neighbors=(1:best_k_Kriging_urban)+1, params_urban, gdist_urban)
+
+par(mfrow=c(1,3), oma=c(1, 1, 4, 1))
+plot(z_urban, z_urban, type="l", lwd=2, main=paste("kNN k=",best_k_kNN_urban), xlab="actual", ylab="predicted", col="red")
+points(z_urban, kNN_prediction_urban, col="cornflowerblue")
+plot(z_urban, z_urban, type="l", lwd=2, main=paste("weighted kNN k=",best_k_weighted_kNN_urban), xlab="actual", ylab="predicted", col="red")
+points(z_urban, kNN_prediction_urban, col="cornflowerblue")
+plot(z_urban, z_urban, type="l", lwd=2, main=paste("Ordinary Kriging k=",best_k_Kriging_urban), xlab="actual", ylab="predicted", col="red")
+points(z_urban, Kriging_prediction_urban, col="cornflowerblue")
+mtext(paste("Urban", Provider, "LTE", Signal), outer = TRUE, cex = 1.5)
+
+best_k_kNN_rural = k[order(kNN_error_mean_rural)[1]]
+best_k_weighted_kNN_rural = k[order(weighted_kNN_error_mean_rural)[1]]
+best_k_Kriging_rural = Kriging_k[order(Kriging_error_mean_rural)[1]]
+kNN_prediction_rural = kNN(z_rural, neighbors=(1:best_k_kNN_rural)+1, gdist_rural)
+weighted_kNN_prediction_rural = weighted_kNN(z_rural, neighbors=(1:best_k_weighted_kNN_rural)+1, gdist_rural)
+Kriging_prediction_rural = Kriging(z_rural, neighbors=(1:best_k_Kriging_rural)+1, params_rural, gdist_rural)
+
+par(mfrow=c(1,3), oma=c(1, 1, 4, 1))
+plot(z_rural, z_rural, type="l", lwd=2, main=paste("kNN k=",best_k_kNN_rural), xlab="actual", ylab="predicted", col="red")
+points(z_rural, kNN_prediction_rural, col="darkorange2")
+plot(z_rural, z_rural, type="l", lwd=2, main=paste("weighted kNN k=",best_k_weighted_kNN_rural), xlab="actual", ylab="predicted", col="red")
+points(z_rural, kNN_prediction_rural, col="darkorange2")
+plot(z_rural, z_rural, type="l", lwd=2, main=paste("Ordinary Kriging k=",best_k_Kriging_rural), xlab="actual", ylab="predicted", col="red")
+points(z_rural, Kriging_prediction_rural, col="darkorange2")
+mtext(paste("Rural", Provider, "LTE", Signal), outer = TRUE, cex = 1.5)
+```
+
+## Comparing Models
+```{r}
+specify_decimal = function(x, k) trimws(format(round(x, k), nsmall=k))
+
+print(paste0("Model          Agg mean error      Urban mean error       Rural mean error"))
+print(paste0("Baseline       ", specify_decimal(baseline_mean, 5), "             ", specify_decimal(baseline_mean_urban, 5), "                ", specify_decimal(baseline_mean_rural, 5)))
+
+print(paste0("kNN            ", specify_decimal(sort(kNN_error_mean)[1], 5), "             ", specify_decimal(sort(kNN_error_mean_urban)[1], 5), "                ", specify_decimal(sort(kNN_error_mean_rural)[1], 5)))
+
+print(paste0("Weighted kNN   ", specify_decimal(sort(weighted_kNN_error_mean)[1], 5), "             ",  specify_decimal(sort(weighted_kNN_error_mean_urban)[1], 5), "                ", specify_decimal(sort(weighted_kNN_error_mean_rural)[1], 5)))
+
+
+print(paste0("Kriging        ", specify_decimal(sort(Kriging_error_mean)[1], 5), "             ", specify_decimal(sort(Kriging_error_mean_urban)[1], 5), "                ", specify_decimal(sort(Kriging_error_mean_rural)[1], 5)))
+```
+
+# Heat Maps
+```{r}
+# Set up variables and placeholders for heat map
+ca = map_data('state', region='California')
+xrang = seq(-124.5,-114,0.05)
+yrang = seq(32.5,42.25,0.05)
+xtarg = c()
+ytarg = c()
+kNN_zhat = matrix(0,length(xrang),length(yrang))
+weighted_kNN_zhat = matrix(0,length(xrang),length(yrang))
+Kriging_zhat = matrix(0,length(xrang),length(yrang))
+
+# Create grid of points to interpolate
+for(j in 1:length(yrang)){
+  for(i in 1:length(xrang)){
+    if(point.in.polygon(xrang[i], yrang[j], ca$long, ca$lat)){
+      xtarg=c(xtarg, xrang[i])
+      ytarg=c(ytarg, yrang[j])
+    }
+    else{
+      xtarg=c(xtarg, NA)
+      ytarg=c(ytarg, NA)
+    }
+  }
+}
+new_data = data.frame(x=xtarg[!is.na(xtarg)], y=ytarg[!is.na(ytarg)])
+
+# Interpolate points with kNN, weighted kNN, and Kriging
+start.time = Sys.time()
+gdist = distance_matrix(new_data, X)
+kNN_result = kNN(z, neighbors = 1:best_k_kNN, gdist)
+weighted_kNN_result = weighted_kNN(z, neighbors = 1:best_k_weighted_kNN, gdist)
+Kriging_result = Kriging(z, neighbors = 1:best_k_Kriging, params_agg, gdist)
+end.time = Sys.time()
+
+# Save interpolated values as matrix
+t=0
+min_z = min(z)
+for(j in 1:length(yrang)){
+  for(i in 1:length(xrang)){
+    if(point.in.polygon(xrang[i], yrang[j], ca$long, ca$lat)){
+      t=t+1
+      kNN_zhat[i,j] = kNN_result[t]
+      weighted_kNN_zhat[i,j] = weighted_kNN_result[t]
+      Kriging_zhat[i,j] = Kriging_result[t]
+    }
+    else{
+      kNN_zhat[i,j] = min_z
+      weighted_kNN_zhat[i,j] = min_z
+      Kriging_zhat[i,j] = min_z
+    }
+  }
+}
+
+time.taken = end.time - start.time
+time.taken
+```
+
+```{r collapse=TRUE, warning=FALSE, message=FALSE}
+# Display heat map
+par(mfrow=c(1,4), oma=c(3, 0, 5, 0))
+layout(matrix(1:4,ncol=4), width = c(2,2,2,1.25))
+image(xrang, yrang, kNN_zhat, col=rainbow(300)[200:20], xlab="Longitude", ylab="Latitude", main=paste("kNN k =", best_k_kNN))
+lines(ca, lwd=2)
+image(xrang, yrang, weighted_kNN_zhat, col=rainbow(300)[200:20], xlab="Longitude", ylab="Latitude", main=paste("Weighted kNN k =", best_k_weighted_kNN))
+lines(ca, lwd=2)
+image(xrang, yrang, Kriging_zhat, col=rainbow(300)[200:20], xlab="Longitude", ylab="Latitude", main=paste("Ordinary Kriging k =", best_k_Kriging))
+lines(ca, lwd=2)
+legend_image = as.raster(rainbow(300)[20:200], ncol=1)
+plot(c(0,2),c(0,1),type = 'n', axes = F,xlab = '', ylab = '', main=paste(Signal, "\n (Mb/s)"))
+text(x=1.5, y = seq(0,1,l=5), labels = floor(seq(min(z),max(z),l=5)))
+rasterImage(legend_image, 0,0,1,1)
+mtext(paste(Provider, "LTE"), outer = TRUE, cex = 1.25)
+```
+
